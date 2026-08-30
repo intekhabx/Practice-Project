@@ -1,0 +1,14 @@
+api -- is the backednd file 
+  src/
+      server.ts --- it is the main file where server is starting
+      app.ts    --- it the application file where express is init and we add /trpc route and openapi docs in it as middleware
+
+      trpc/
+            trpc.ts  -- trpc init file
+            router.ts  -- all procedure write here
+
+
+
+
+POST (trpc has only query and mutation)                      http://localhost:5000/trpc/deleteTodo    -- this is for trpc call route
+DELETE (we give DELETE in openapi docs --meta)               http://localhost:5000/trpc/delete/:id    -- this is for normal api call route and openapi documentation
