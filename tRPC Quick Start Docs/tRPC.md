@@ -16,7 +16,7 @@ STEP 5 → Ek route + root router
 STEP 6 → OpenAPI support (trpc-to-openapi)
 STEP 7 → apps/api me Express server mount (dev + start script)
 STEP 8 → @repo/trpc/client (type-only exports)
-STEP 9 → apps/web me TanStack Query client wiring
+STEP 9 → apps/web me TanStack Query client wiring (raw client → cookies → logger → QueryClient → options proxy → optional React context)
 ```
 
 <br>
@@ -584,35 +584,78 @@ client.
 
 # 🟦 STEP 9 — `apps/web` (Next.js + TanStack Query) setup
 
-**📦 Packages (sirf web app ke andar):**
+Jaise context ko bare-minimum se build kiya tha, waise hi client side ko bhi
+ek-ek layer karke banate hain: pehle sirf raw tRPC client (bina React ke),
+phir QueryClient, phir options proxy, phir React context, aur end me actual
+component usage.
+
+<br>
+
+### 9.1 — Package install
 
 ```bash
 cd apps/web
 pnpm add @repo/trpc @trpc/tanstack-react-query @tanstack/react-query
 ```
 
-📄 **File: `apps/web/trpc/client.ts`**
+- `@repo/trpc` → apna internal package (types + `@trpc/client` re-exports)
+- `@tanstack/react-query` → `QueryClient`, `useQuery`, `useMutation`
+- `@trpc/tanstack-react-query` → tRPC ko TanStack Query ke saath jodne wala glue
 
-```ts
-import type { ServerRouter } from '@repo/trpc/server/index';
-import { createTRPCContext } from '@trpc/tanstack-react-query';
+<br>
 
-export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<ServerRouter>();
-```
+---
+
+### 9.2 — Bare-minimum tRPC client (no React yet)
+
+Sabse pehle sirf ek raw tRPC client banao jo backend ko call kar sake — koi
+React, koi provider, koi query hook abhi involve nahi hai. Isse tum
+console.log / server action me bhi test kar sakte ho ki backend se connection
+ban raha hai ya nahi.
 
 📄 **File: `apps/web/trpc/create-client.ts`**
 
 ```ts
-import { createTRPCClient, httpBatchLink, loggerLink } from '@repo/trpc/client';
+import { createTRPCClient, httpBatchLink } from '@repo/trpc/client';
 import type { ServerRouter } from '@repo/trpc/server/index';
-import { QueryClient } from '@tanstack/react-query';
-import { createTRPCOptionsProxy } from '@trpc/tanstack-react-query';
-
-export const queryClient = new QueryClient();
 
 export const trpcClient = createTRPCClient<ServerRouter>({
   links: [
-    loggerLink(),
+    httpBatchLink({
+      url: process.env.BASE_URL?.concat('/trpc') || 'http://localhost:5000/trpc',
+    }),
+  ],
+});
+```
+
+Quick test (kahin bhi, e.g. ek temporary script me):
+
+```ts
+const result = await trpcClient.health.getHealth.query();
+console.log(result); // { status: 'healthy' }
+```
+
+Agar ye kaam kar gaya, matlab backend se connection sahi hai. Ab isi file me
+aage build karte hain.
+
+<br>
+
+---
+
+### 9.3 — Cookies ke saath cross-origin requests (credentials)
+
+Agar backend cookie-based auth use karta hai (`refresh_token`), to default
+`fetch` cookies nahi bhejta cross-origin requests me. Isliye `httpBatchLink`
+ka apna custom `fetch` dena padta hai.
+
+📄 **File: `apps/web/trpc/create-client.ts`** (update)
+
+```ts
+import { createTRPCClient, httpBatchLink } from '@repo/trpc/client';
+import type { ServerRouter } from '@repo/trpc/server/index';
+
+export const trpcClient = createTRPCClient<ServerRouter>({
+  links: [
     httpBatchLink({
       url: process.env.BASE_URL?.concat('/trpc') || 'http://localhost:5000/trpc',
 
@@ -626,14 +669,70 @@ export const trpcClient = createTRPCClient<ServerRouter>({
     }),
   ],
 });
+```
 
-export const trpc = createTRPCOptionsProxy<ServerRouter>({
-  client: trpcClient,
-  queryClient,
+<br>
+
+---
+
+### 9.4 — Debugging ke liye `loggerLink` add karo
+
+`loggerLink` browser console me har tRPC request/response log karta hai —
+dev me kaafi useful hai, production me hata sakte ho.
+
+📄 **File: `apps/web/trpc/create-client.ts`** (update)
+
+```ts
+import { createTRPCClient, httpBatchLink, loggerLink } from '@repo/trpc/client';
+import type { ServerRouter } from '@repo/trpc/server/index';
+
+export const trpcClient = createTRPCClient<ServerRouter>({
+  links: [
+    loggerLink(),
+    httpBatchLink({
+      url: process.env.BASE_URL?.concat('/trpc') || 'http://localhost:5000/trpc',
+      fetch(url, options) {
+        return fetch(url, { ...options, credentials: 'include' });
+      },
+    }),
+  ],
 });
 ```
 
-📄 **File: `apps/web/providers/provider.tsx`**
+<br>
+
+---
+
+### 9.5 — `QueryClient` + `QueryClientProvider` add karo
+
+Ab TanStack Query layer aati hai. `QueryClient` cache rakhta hai (kaunsa data
+kab fetch hua, kab stale hoga, etc). Isko app ke root me ek Provider ke through
+inject karna padta hai taaki har component `useQuery` / `useMutation` use kar
+sake.
+
+📄 **File: `apps/web/trpc/create-client.ts`** (update — `queryClient` add)
+
+```ts
+import { createTRPCClient, httpBatchLink, loggerLink } from '@repo/trpc/client';
+import type { ServerRouter } from '@repo/trpc/server/index';
+import { QueryClient } from '@tanstack/react-query';
+
+export const queryClient = new QueryClient();
+
+export const trpcClient = createTRPCClient<ServerRouter>({
+  links: [
+    loggerLink(),
+    httpBatchLink({
+      url: process.env.BASE_URL?.concat('/trpc') || 'http://localhost:5000/trpc',
+      fetch(url, options) {
+        return fetch(url, { ...options, credentials: 'include' });
+      },
+    }),
+  ],
+});
+```
+
+📄 **File: `apps/web/providers/provider.tsx`** — client component jo `QueryClientProvider` se app ko wrap karta hai
 
 ```tsx
 'use client';
@@ -650,7 +749,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 }
 ```
 
-📄 **File: `apps/web/app/layout.tsx`** (root layout me wrap karo)
+📄 **File: `apps/web/app/layout.tsx`** — root layout, jahan `Providers` ko wrap karna hai
 
 ```tsx
 import { Providers } from '../providers/provider';
@@ -666,7 +765,68 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-**Usage kisi bhi component me:**
+Is stage tak: agar chaho to plain TanStack Query se bhi call kar sakte ho —
+
+```tsx
+'use client';
+import { useQuery } from '@tanstack/react-query';
+import { trpcClient } from '../trpc/create-client';
+
+export function HealthCheck() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['health'],
+    queryFn: () => trpcClient.health.getHealth.query(),
+  });
+
+  if (isLoading) return <p>Loading...</p>;
+  return <p>Status: {data?.status}</p>;
+}
+```
+
+Ye kaam karega, lekin `queryKey` manually likhni padi (`['health']`) — agar
+typo ho jaye ya key clash ho jaye to bugs aa sakte hain. Agla step isi
+problem ko solve karta hai.
+
+<br>
+
+---
+
+### 9.6 — `createTRPCOptionsProxy` add karo (auto `.queryOptions()`)
+
+Manual `queryKey` likhna error-prone hai. `createTRPCOptionsProxy` ek proxy
+object banata hai jisme har procedure ke paas khud ka `.queryOptions()` /
+`.mutationOptions()` method hota hai — `queryKey` khud-ba-khud router path se
+generate hoti hai, typo ka chance nahi rehta, aur autocomplete bhi milta hai.
+
+📄 **File: `apps/web/trpc/create-client.ts`** (final update — `trpc` proxy add)
+
+```ts
+import { createTRPCClient, httpBatchLink, loggerLink } from '@repo/trpc/client';
+import type { ServerRouter } from '@repo/trpc/server/index';
+import { QueryClient } from '@tanstack/react-query';
+import { createTRPCOptionsProxy } from '@trpc/tanstack-react-query';
+
+export const queryClient = new QueryClient();
+
+export const trpcClient = createTRPCClient<ServerRouter>({
+  links: [
+    loggerLink(),
+    httpBatchLink({
+      url: process.env.BASE_URL?.concat('/trpc') || 'http://localhost:5000/trpc',
+      fetch(url, options) {
+        return fetch(url, { ...options, credentials: 'include' });
+      },
+    }),
+  ],
+});
+
+export const trpc = createTRPCOptionsProxy<ServerRouter>({
+  client: trpcClient,
+  queryClient,
+});
+```
+
+Ab usage clean ho jaata hai:
 
 ```tsx
 'use client';
@@ -681,10 +841,36 @@ export function HealthCheck() {
 }
 ```
 
-`createTRPCOptionsProxy` ki wajah se har procedure ko `.queryOptions()` /
-`.mutationOptions()` milta hai jo seedha `useQuery` / `useMutation` me chala
-jaata hai — pura type inference `ServerRouter` se aata hai, frontend me kahin
-bhi manual typing nahi karni padti.
+`trpc.health.getHealth.queryOptions()` khud `queryKey` + `queryFn` dono
+generate kar deta hai — pura type inference `ServerRouter` se aata hai,
+manual typing kahin nahi karni padti. Mutation ke liye same tarah
+`trpc.<router>.<procedure>.mutationOptions()` milta hai jo `useMutation` me
+jaata hai.
+
+<br>
+
+---
+
+### 9.7 — (Optional) `createTRPCContext` — React hooks jaise `useTRPC()`
+
+Agar tum chahte ho ki `trpc` client ko import karne ke bajaye React context
+se access karo (jaise `useTRPC()` hook), to ye extra layer add kar sakte ho.
+Ye optional hai — Step 9.6 wala `trpc` proxy already kaam karta hai bina
+isko add kiye bhi.
+
+📄 **File: `apps/web/trpc/client.ts`**
+
+```ts
+import type { ServerRouter } from '@repo/trpc/server/index';
+import { createTRPCContext } from '@trpc/tanstack-react-query';
+
+export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<ServerRouter>();
+```
+
+Kab use karo: agar deeply nested components me client pass karna hai bina
+import path repeat kiye, ya agar server-side aur client-side dono jagah
+context switch karna ho (Next.js App Router SSR patterns me common hai).
+Simple apps ke liye Step 9.6 ka direct `trpc` export hi kaafi hai.
 
 ═══════════════════════════════════════════════════════════════════════════
 <br>
