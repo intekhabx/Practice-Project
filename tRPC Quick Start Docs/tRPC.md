@@ -190,7 +190,21 @@ Koi naya package nahi chahiye (Express already install ho chuka hai).
 ```ts
 import type { Request, Response, CookieOptions } from 'express';
 
-export const setCookie = (res: Response, name: string, value: string, opts: CookieOptions) => {
+const ONE_MINUTE = 60 * 1000;
+const ONE_HOUR = ONE_MINUTE * 60;
+const ONE_DAY = ONE_HOUR * 24;
+const ONE_WEEK = ONE_DAY * 7;
+
+
+const defaultCookieOption: CookieOptions = {
+  path: "/",
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+  maxAge: Number(process.env.REFRESH_TOKEN_EXPIRES_IN) * 1000 || ONE_WEEK,
+}
+
+export const setCookie = (res: Response, name: string, value: string, opts: CookieOptions = defaultCookieOption) => {
   res.cookie(name, value, opts);
 };
 
@@ -225,7 +239,7 @@ export interface ITRPCUserContext {
 }
 
 export interface ITRPCContext {
-  setCookie: (name: string, value: string, opts: CookieOptions) => void;
+  setCookie: (name: string, value: string, opts?: CookieOptions) => void;
   getCookie: (name: string) => string | undefined;
   clearCookie: (name: string) => void;
   user?: ITRPCUserContext | undefined;
@@ -233,7 +247,7 @@ export interface ITRPCContext {
 
 export const createContext = async ({ req, res }: CreateExpressContextOptions) => {
   const ctx: ITRPCContext = {
-    setCookie(name: string, value: string, opts: CookieOptions) {
+    setCookie(name: string, value: string, opts?: CookieOptions) {
       return setCookieUtils(res, name, value, opts);
     },
 
@@ -290,9 +304,9 @@ export const publicProcedure = t.procedure;
 export const authenticatedProcedure = t.procedure.use(async (options) => {
   const { ctx, next } = options;
 
-  const token = ctx.getCookie('refresh_token');
+  const token = ctx.getCookie('token');
   if (!token) {
-    throw new TRPCError({ message: 'refresh_token is missing', code: 'UNAUTHORIZED' });
+    throw new TRPCError({ message: 'token is missing', code: 'UNAUTHORIZED' });
   }
 
   // TODO: JWT verify karke real user id nikalo
@@ -368,9 +382,9 @@ export const publicProcedure = t.procedure;
 export const authenticatedProcedure = t.procedure.use(async (options) => {
   const { ctx, next } = options;
 
-  const token = ctx.getCookie('refresh_token');
+  const token = ctx.getCookie('token');
   if (!token) {
-    throw new TRPCError({ message: 'refresh_token is missing', code: 'UNAUTHORIZED' });
+    throw new TRPCError({ message: 'token is missing', code: 'UNAUTHORIZED' });
   }
 
   const id = 'hello';
@@ -487,6 +501,7 @@ export default createApplication;
 📄 **File: `apps/api/src/server.ts`**
 
 ```ts
+import "dotenv/config";
 import http from 'node:http';
 import createApplication from './app.js';
 
@@ -523,6 +538,7 @@ main();
     "@trpc/server": "^11.18.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "trpc-to-openapi": "^3.3.0"
   },
