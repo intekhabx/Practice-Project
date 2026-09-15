@@ -133,7 +133,21 @@ First, create the cookie helper functions in a separate file, and then import th
 ```ts
 import type { Request, Response, CookieOptions } from 'express';
 
-export const setCookie = (res: Response, name: string, value: string, opts: CookieOptions) => {
+const ONE_MINUTE = 60 * 1000;
+const ONE_HOUR = ONE_MINUTE * 60;
+const ONE_DAY = ONE_HOUR * 24;
+const ONE_WEEK = ONE_DAY * 7;
+
+
+const defaultCookieOption: CookieOptions = {
+  path: "/",
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+  maxAge: Number(process.env.REFRESH_TOKEN_EXPIRES_IN) * 1000 || ONE_WEEK,
+}
+
+export const setCookie = (res: Response, name: string, value: string, opts: CookieOptions = defaultCookieOption) => {
   res.cookie(name, value, opts);
 };
 
@@ -162,7 +176,7 @@ export interface ITRPCUserContext {
 }
 
 export interface ITRPCContext {
-  setCookie: (name: string, value: string, opts: CookieOptions) => void;
+  setCookie: (name: string, value: string, opts?: CookieOptions) => void;
   getCookie: (name: string) => string | undefined;
   clearCookie: (name: string) => void;
   user?: ITRPCUserContext | undefined;
@@ -170,7 +184,7 @@ export interface ITRPCContext {
 
 export const createContext = async ({ req, res }: CreateExpressContextOptions) => {
   const ctx: ITRPCContext = {
-    setCookie(name: string, value: string, opts: CookieOptions) {
+    setCookie(name: string, value: string, opts?: CookieOptions) {
       return setCookieUtils(res, name, value, opts);
     },
 
